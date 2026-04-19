@@ -83,4 +83,7 @@ public abstract class Module {
 
     public void onTick() {
     }
+
+    public void onRenderWorld(com.mojang.blaze3d.vertex.PoseStack poseStack, float partialTick) {
+    }
 }

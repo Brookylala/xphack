@@ -9,7 +9,9 @@ import net.ozanarchy.brooksclient.client.gui.theme.XpShellManager;
 import net.ozanarchy.brooksclient.client.hud.InfoHudRenderer;
 import net.ozanarchy.brooksclient.client.module.Module;
 import net.ozanarchy.brooksclient.client.module.ModuleManager;
+import net.ozanarchy.brooksclient.client.module.modules.ChestESPModule;
 import net.ozanarchy.brooksclient.client.module.modules.InfoModule;
+import net.ozanarchy.brooksclient.client.render.ChestEspWorldRenderer;
 import net.ozanarchy.brooksclient.client.util.ChatUtils;
 import org.lwjgl.glfw.GLFW;
 
@@ -29,6 +31,7 @@ public final class XPHackClient implements ClientModInitializer {
     private final ModuleManager moduleManager = ModuleManager.getInstance();
     private final Set<Integer> heldKeys = new HashSet<>();
     private final InfoHudRenderer infoHudRenderer = new InfoHudRenderer();
+    private final ChestEspWorldRenderer chestEspWorldRenderer = new ChestEspWorldRenderer();
     private final Map<InfoModule.Line, InfoHudRenderer.HudRect> lastInfoBounds = new EnumMap<>(InfoModule.Line.class);
 
     private InfoModule.Line draggingLine;
@@ -58,6 +61,13 @@ public final class XPHackClient implements ClientModInitializer {
             return;
         }
         instance.renderInfoHud(client, graphicsObject);
+    }
+
+    public static void renderChestEspHook(Minecraft client) {
+        if (instance == null) {
+            return;
+        }
+        instance.renderChestEsp(client);
     }
 
     private void handleGuiHotkey(Minecraft client) {
@@ -106,6 +116,19 @@ public final class XPHackClient implements ClientModInitializer {
 
         lastInfoBounds.clear();
         lastInfoBounds.putAll(infoHudRenderer.renderAndCollectBounds(client, graphicsObj, infoModule));
+    }
+
+    private void renderChestEsp(Minecraft client) {
+        if (client == null || client.level == null || client.player == null) {
+            return;
+        }
+        ChestESPModule chestEspModule = moduleManager.getModule(ChestESPModule.class);
+        if (chestEspModule == null || !chestEspModule.isEnabled()) {
+            chestEspWorldRenderer.clear();
+            return;
+        }
+        chestEspWorldRenderer.update(client, chestEspModule);
+        chestEspWorldRenderer.render();
     }
 
     private void handleInfoHudDragging(Minecraft client) {

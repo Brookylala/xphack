@@ -4,7 +4,8 @@
   "package": "net.ozanarchy.brooksclient.mixin.client",
   "compatibilityLevel": "JAVA_25",
   "client": [
-    "GuiMixin"
+    "GuiMixin",
+    "GameRendererMixin"
   ],
   "injectors": {
     "defaultRequire": 1

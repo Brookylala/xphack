@@ -9,6 +9,7 @@ import net.ozanarchy.brooksclient.client.module.modules.AutoSprintModule;
 import net.ozanarchy.brooksclient.client.module.modules.AutoToolModule;
 import net.ozanarchy.brooksclient.client.module.modules.AutoTotemModule;
 import net.ozanarchy.brooksclient.client.module.modules.AutoWalkModule;
+import net.ozanarchy.brooksclient.client.module.modules.ChestESPModule;
 import net.ozanarchy.brooksclient.client.module.modules.FlightModule;
 import net.ozanarchy.brooksclient.client.module.modules.FreecamModule;
 import net.ozanarchy.brooksclient.client.module.modules.FullbrightModule;
@@ -32,6 +33,7 @@ public final class ModuleManager {
         register(new AutoJumpModule());
         register(new FlightModule());
         register(new FreecamModule());
+        register(new ChestESPModule());
         register(new KillAuraModule());
         register(new NoFallModule());
         register(new AutoToolModule());

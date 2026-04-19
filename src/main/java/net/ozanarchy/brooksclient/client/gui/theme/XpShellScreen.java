@@ -17,15 +17,17 @@ import net.ozanarchy.brooksclient.client.module.Module;
 import net.ozanarchy.brooksclient.client.module.ModuleManager;
 import net.ozanarchy.brooksclient.client.module.modules.InfoModule;
 import net.ozanarchy.brooksclient.client.setting.BooleanSetting;
+import net.ozanarchy.brooksclient.client.setting.ColorSetting;
 import net.ozanarchy.brooksclient.client.setting.ModeSetting;
 import net.ozanarchy.brooksclient.client.setting.Setting;
 import net.ozanarchy.brooksclient.client.setting.SliderSetting;
 import org.lwjgl.glfw.GLFW;
 
-import java.lang.reflect.Method;
+import java.awt.Color;
 import java.awt.Desktop;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalTime;
@@ -47,6 +49,13 @@ public final class XpShellScreen extends Screen {
     private static final int TASKBAR_HEIGHT = 28;
     private static final int RESIZE_GRIP_SIZE = 12;
     private static final DateTimeFormatter CLOCK_FORMAT = DateTimeFormatter.ofPattern("h:mm a", Locale.US);
+
+    private static final int COLOR_POPUP_WIDTH = 224;
+    private static final int COLOR_POPUP_HEIGHT = 180;
+    private static final int COLOR_SQUARE_SIZE = 96;
+    private static final int COLOR_BAR_WIDTH = 14;
+    private static final int COLOR_BAR_HEIGHT = 96;
+
     private final XpShellRenderer renderer;
     private final ModuleManager moduleManager;
     private final StartMenuComponent startMenu = new StartMenuComponent();
@@ -102,6 +111,12 @@ public final class XpShellScreen extends Screen {
             }
         }
 
+        for (CategoryWindow window : windows) {
+            if (!window.minimized && window.colorPicker.isOpen()) {
+                renderColorPickerPopup(graphics, window);
+            }
+        }
+
         DesktopLayout desktopLayout = buildDesktopLayout();
         renderTaskbarButtons(graphics, desktopLayout.taskButtons());
         renderer.renderTaskbarTray(graphics, font, desktopLayout.trayBounds(), currentClockText());
@@ -109,7 +124,8 @@ public final class XpShellScreen extends Screen {
         renderer.renderStartButton(graphics, font, desktopLayout.startButtonBounds(), startHovered, startMenu.isOpen());
 
         Category currentCategory = activeWindow == null ? Category.MOVEMENT : activeWindow.category;
-        startMenu.render(graphics, renderer, font, moduleManager, mouseX, mouseY, currentCategory, currentPlayerName(), currentPlayerSkin());
+        startMenu.render(graphics, renderer, font, moduleManager, mouseX, mouseY, currentCategory, currentPlayerName(),
+                currentPlayerSkin());
     }
 
     @Override
@@ -150,6 +166,15 @@ public final class XpShellScreen extends Screen {
             if (window.minimized) {
                 continue;
             }
+
+            if (window.colorPicker.isOpen()) {
+                UiRect popupBounds = colorPickerBounds(window);
+                if (popupBounds.contains(mouseX, mouseY)) {
+                    bringToFront(window);
+                    return handleColorPickerClick(window, mouseX, mouseY, button);
+                }
+            }
+
             WindowLayout layout = buildWindowLayout(window);
             if (!layout.windowBounds().contains(mouseX, mouseY)) {
                 continue;
@@ -188,6 +213,15 @@ public final class XpShellScreen extends Screen {
                 dragOffsetY = (int) (mouseY - window.y);
                 return true;
             }
+
+            if (window.colorPicker.isOpen()) {
+                UiRect popupBounds = colorPickerBounds(window);
+                if (!popupBounds.contains(mouseX, mouseY)) {
+                    window.colorPicker.close();
+                    return true;
+                }
+            }
+
             if (window.settingsWindow) {
                 if (window.settingsView == SettingsView.KEYBINDS) {
                     if (clickKeybindOptions(window, layout.modulesPane(), mouseX, mouseY, button)) {
@@ -215,6 +249,13 @@ public final class XpShellScreen extends Screen {
             return true;
         }
 
+        for (CategoryWindow window : windows) {
+            if (window.colorPicker.isOpen()) {
+                window.colorPicker.close();
+                return true;
+            }
+        }
+
         return super.mouseClicked(event, doubleClick);
     }
 
@@ -225,6 +266,9 @@ public final class XpShellScreen extends Screen {
         for (CategoryWindow window : windows) {
             window.draggingSlider = null;
             window.draggingSliderTrack = null;
+            window.colorPicker.draggingSquare = false;
+            window.colorPicker.draggingHue = false;
+            window.colorPicker.draggingAlpha = false;
         }
         saveUiSettings();
         return super.mouseReleased(event);
@@ -251,6 +295,13 @@ public final class XpShellScreen extends Screen {
             return true;
         }
 
+        for (int i = windows.size() - 1; i >= 0; i--) {
+            CategoryWindow window = windows.get(i);
+            if (!window.minimized && handleColorPickerDrag(window, mouseX, mouseY)) {
+                return true;
+            }
+        }
+
         if (activeWindow != null && activeWindow.draggingSlider != null && activeWindow.draggingSliderTrack != null) {
             updateSliderFromMouse(activeWindow.draggingSlider, activeWindow.draggingSliderTrack, mouseX);
             return true;
@@ -263,6 +314,14 @@ public final class XpShellScreen extends Screen {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (startMenu.isOpen() && startMenu.mouseScrolled(mouseX, mouseY, scrollY, moduleManager)) {
             return true;
+        }
+
+        for (CategoryWindow window : windows) {
+            if (!window.minimized && window.colorPicker.isOpen()) {
+                if (colorPickerBounds(window).contains(mouseX, mouseY)) {
+                    return true;
+                }
+            }
         }
 
         for (int i = windows.size() - 1; i >= 0; i--) {
@@ -278,7 +337,8 @@ public final class XpShellScreen extends Screen {
             if (layout.modulesPane().contains(mouseX, mouseY)) {
                 int rows;
                 if (window.settingsWindow) {
-                    rows = window.settingsView == SettingsView.KEYBINDS ? keybindRows().size() : backgroundOptions.size();
+                    rows = window.settingsView == SettingsView.KEYBINDS ? keybindRows().size()
+                            : backgroundOptions.size();
                 } else {
                     rows = modulesForCategory(window.category).size();
                 }
@@ -311,6 +371,14 @@ public final class XpShellScreen extends Screen {
     @Override
     public boolean keyPressed(KeyEvent event) {
         if (event.key() == InputConstants.KEY_ESCAPE) {
+            for (int i = windows.size() - 1; i >= 0; i--) {
+                CategoryWindow window = windows.get(i);
+                if (window.colorPicker.isOpen()) {
+                    window.colorPicker.close();
+                    return true;
+                }
+            }
+
             if (startMenu.isOpen()) {
                 startMenu.close();
                 return true;
@@ -387,8 +455,7 @@ public final class XpShellScreen extends Screen {
                 layout.windowBounds().w(),
                 layout.windowBounds().h(),
                 title,
-                font
-        );
+                font);
 
         if (window.settingsWindow) {
             renderSettingsToolbar(graphics, layout.contentPane(), window);
@@ -411,7 +478,8 @@ public final class XpShellScreen extends Screen {
         graphics.fill(contentPane.x(), contentPane.y(), contentPane.right(), contentPane.y() + 18, 0xFFF8FAFF);
         graphics.horizontalLine(contentPane.x(), contentPane.right() - 1, contentPane.y(), 0xFFFFFFFF);
         graphics.horizontalLine(contentPane.x(), contentPane.right() - 1, contentPane.y() + 17, 0xFF8FA5C6);
-        String label = "Category: " + prettify(window.category.name()) + "   Modules: " + modulesForCategory(window.category).size();
+        String label = "Category: " + prettify(window.category.name()) + "   Modules: "
+                + modulesForCategory(window.category).size();
         graphics.text(font, label, contentPane.x() + 8, contentPane.y() + 5, 0xFF1D2B4F, false);
     }
 
@@ -423,7 +491,8 @@ public final class XpShellScreen extends Screen {
         graphics.text(font, label, contentPane.x() + 8, contentPane.y() + 5, 0xFF1D2B4F, false);
     }
 
-    private void renderBackgroundOptions(GuiGraphicsExtractor graphics, UiRect pane, CategoryWindow window, int mouseX, int mouseY) {
+    private void renderBackgroundOptions(GuiGraphicsExtractor graphics, UiRect pane, CategoryWindow window, int mouseX,
+            int mouseY) {
         renderer.renderPanel(graphics, pane.x(), pane.y(), pane.w(), pane.h());
         graphics.text(font, "Backgrounds", pane.x() + 8, pane.y() + 6, 0xFF0E2C67, false);
 
@@ -433,7 +502,8 @@ public final class XpShellScreen extends Screen {
         int rowY = top;
         for (int i = window.moduleScroll; i < end; i++) {
             String label = backgroundOptions.get(i).label();
-            boolean hovered = mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY && mouseY <= rowY + ROW_HEIGHT - 2;
+            boolean hovered = mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY
+                    && mouseY <= rowY + ROW_HEIGHT - 2;
             boolean selected = i == selectedBackgroundIndex;
             renderer.renderListRow(
                     graphics,
@@ -444,8 +514,7 @@ public final class XpShellScreen extends Screen {
                     ROW_HEIGHT - 2,
                     label,
                     selected || hovered,
-                    selected
-            );
+                    selected);
             rowY += ROW_HEIGHT;
         }
     }
@@ -453,21 +522,22 @@ public final class XpShellScreen extends Screen {
     private void renderBackgroundPreview(GuiGraphicsExtractor graphics, UiRect pane) {
         renderer.renderPanel(graphics, pane.x(), pane.y(), pane.w(), pane.h());
         graphics.text(font, "Preview", pane.x() + 8, pane.y() + 6, 0xFF0E2C67, false);
-        graphics.text(font, "Selected: " + selectedBackground().label(), pane.x() + 10, pane.y() + 28, 0xFF4A5F80, false);
+        graphics.text(font, "Selected: " + selectedBackground().label(), pane.x() + 10, pane.y() + 28, 0xFF4A5F80,
+                false);
         graphics.text(font, "Applied to desktop immediately.", pane.x() + 10, pane.y() + 42, 0xFF4A5F80, false);
         UiRect button = new UiRect(pane.x() + 10, pane.bottom() - 24, 120, 16);
         UiRect keybindsButton = new UiRect(pane.x() + 138, pane.bottom() - 24, 120, 16);
         UiRect moduleChatButton = new UiRect(pane.x() + 266, pane.bottom() - 24, 130, 16);
         renderer.renderModeButton(graphics, font, button.x(), button.y(), button.w(), "Open Folder");
-        renderer.renderModeButton(graphics, font, keybindsButton.x(), keybindsButton.y(), keybindsButton.w(), "Keybinds");
+        renderer.renderModeButton(graphics, font, keybindsButton.x(), keybindsButton.y(), keybindsButton.w(),
+                "Keybinds");
         renderer.renderModeButton(
                 graphics,
                 font,
                 moduleChatButton.x(),
                 moduleChatButton.y(),
                 moduleChatButton.w(),
-                "Module Chat: " + (XPHackClient.isModuleChatMessagesEnabled() ? "On" : "Off")
-        );
+                "Module Chat: " + (XPHackClient.isModuleChatMessagesEnabled() ? "On" : "Off"));
         if (activeWindow != null && activeWindow.settingsWindow) {
             activeWindow.openFolderButtonBounds = button;
             activeWindow.keybindsButtonBounds = keybindsButton;
@@ -475,7 +545,8 @@ public final class XpShellScreen extends Screen {
         }
     }
 
-    private void renderKeybindOptions(GuiGraphicsExtractor graphics, UiRect pane, CategoryWindow window, int mouseX, int mouseY) {
+    private void renderKeybindOptions(GuiGraphicsExtractor graphics, UiRect pane, CategoryWindow window, int mouseX,
+            int mouseY) {
         renderer.renderPanel(graphics, pane.x(), pane.y(), pane.w(), pane.h());
         graphics.text(font, "Bindings", pane.x() + 8, pane.y() + 6, 0xFF0E2C67, false);
 
@@ -486,7 +557,8 @@ public final class XpShellScreen extends Screen {
         int rowY = top;
         for (int i = window.moduleScroll; i < end; i++) {
             KeybindRow row = rowsData.get(i);
-            boolean hovered = mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY && mouseY <= rowY + ROW_HEIGHT - 2;
+            boolean hovered = mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY
+                    && mouseY <= rowY + ROW_HEIGHT - 2;
             boolean selected = row.guiToggle ? window.selectedGuiKeybind : row.module == window.selectedKeybindModule;
             String keyText = keybindName(row.guiToggle ? XPHackClient.getOpenGuiKeybind() : row.module.getKeybind());
             renderer.renderListRow(
@@ -498,8 +570,7 @@ public final class XpShellScreen extends Screen {
                     ROW_HEIGHT - 2,
                     row.label + " : " + keyText,
                     selected || hovered,
-                    selected
-            );
+                    selected);
             rowY += ROW_HEIGHT;
         }
     }
@@ -510,9 +581,11 @@ public final class XpShellScreen extends Screen {
 
         KeybindRow selected = window.selectedGuiKeybind
                 ? new KeybindRow("Open GUI", null, true)
-                : (window.selectedKeybindModule == null ? null : new KeybindRow(window.selectedKeybindModule.getName(), window.selectedKeybindModule, false));
+                : (window.selectedKeybindModule == null ? null
+                        : new KeybindRow(window.selectedKeybindModule.getName(), window.selectedKeybindModule, false));
         if (selected == null) {
-            graphics.text(font, "Select a module keybind from the list.", pane.x() + 10, pane.y() + 28, 0xFF4A5F80, false);
+            graphics.text(font, "Select a module keybind from the list.", pane.x() + 10, pane.y() + 28, 0xFF4A5F80,
+                    false);
             return;
         }
 
@@ -525,21 +598,22 @@ public final class XpShellScreen extends Screen {
                 pane.x() + 10,
                 pane.y() + 60,
                 window.awaitingKeybind ? 0xFF214F8F : 0xFF4A5F80,
-                false
-        );
+                false);
 
         UiRect setButton = new UiRect(pane.x() + 10, pane.bottom() - 24, 110, 16);
         UiRect clearButton = new UiRect(pane.x() + 128, pane.bottom() - 24, 110, 16);
         UiRect backgroundsButton = new UiRect(pane.x() + 246, pane.bottom() - 24, 120, 16);
         renderer.renderModeButton(graphics, font, setButton.x(), setButton.y(), setButton.w(), "Set Key");
         renderer.renderModeButton(graphics, font, clearButton.x(), clearButton.y(), clearButton.w(), "Clear");
-        renderer.renderModeButton(graphics, font, backgroundsButton.x(), backgroundsButton.y(), backgroundsButton.w(), "Backgrounds");
+        renderer.renderModeButton(graphics, font, backgroundsButton.x(), backgroundsButton.y(), backgroundsButton.w(),
+                "Backgrounds");
         window.setKeybindButtonBounds = setButton;
         window.clearKeybindButtonBounds = clearButton;
         window.backgroundsButtonBounds = backgroundsButton;
     }
 
-    private void renderModules(GuiGraphicsExtractor graphics, UiRect pane, CategoryWindow window, int mouseX, int mouseY) {
+    private void renderModules(GuiGraphicsExtractor graphics, UiRect pane, CategoryWindow window, int mouseX,
+            int mouseY) {
         renderer.renderPanel(graphics, pane.x(), pane.y(), pane.w(), pane.h());
         graphics.text(font, "Modules", pane.x() + 8, pane.y() + 6, 0xFF0E2C67, false);
 
@@ -555,7 +629,8 @@ public final class XpShellScreen extends Screen {
         int rowY = top;
         for (int i = window.moduleScroll; i < end; i++) {
             Module module = modules.get(i);
-            boolean hovered = mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY && mouseY <= rowY + ROW_HEIGHT - 2;
+            boolean hovered = mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY
+                    && mouseY <= rowY + ROW_HEIGHT - 2;
             boolean selected = module == window.selectedModule;
             renderer.renderListRow(
                     graphics,
@@ -566,15 +641,16 @@ public final class XpShellScreen extends Screen {
                     ROW_HEIGHT - 2,
                     module.getName(),
                     selected || hovered,
-                    module.isEnabled()
-            );
+                    module.isEnabled());
             rowY += ROW_HEIGHT;
         }
     }
 
-    private void renderSettings(GuiGraphicsExtractor graphics, UiRect pane, CategoryWindow window, int mouseX, int mouseY) {
+    private void renderSettings(GuiGraphicsExtractor graphics, UiRect pane, CategoryWindow window, int mouseX,
+            int mouseY) {
         renderer.renderPanel(graphics, pane.x(), pane.y(), pane.w(), pane.h());
-        String header = window.selectedModule == null ? "Module Settings" : window.selectedModule.getName() + " Settings";
+        String header = window.selectedModule == null ? "Module Settings"
+                : window.selectedModule.getName() + " Settings";
         graphics.text(font, header, pane.x() + 8, pane.y() + 6, 0xFF0E2C67, false);
 
         if (window.selectedModule == null) {
@@ -592,10 +668,12 @@ public final class XpShellScreen extends Screen {
         int end = Math.min(totalRows, window.settingScroll + rows);
         int rowY = top;
         for (int i = window.settingScroll; i < end; i++) {
-            graphics.fill(pane.x() + 6, rowY, pane.right() - 6, rowY + ROW_HEIGHT - 2, (i % 2 == 0) ? 0xFFEFF3FA : 0xFFE7EDF8);
+            graphics.fill(pane.x() + 6, rowY, pane.right() - 6, rowY + ROW_HEIGHT - 2,
+                    (i % 2 == 0) ? 0xFFEFF3FA : 0xFFE7EDF8);
             if (i == 0) {
                 renderer.renderSettingLabel(graphics, font, pane.x() + 10, rowY + 5, "Keybind");
-                String keybindText = window.awaitingModuleKeybind ? "Press key..." : keybindName(window.selectedModule.getKeybind());
+                String keybindText = window.awaitingModuleKeybind ? "Press key..."
+                        : keybindName(window.selectedModule.getKeybind());
                 renderer.renderModeButton(graphics, font, pane.right() - 126, rowY + 2, 116, keybindText);
             } else if (infoSelected && i == 1) {
                 renderer.renderSettingLabel(graphics, font, pane.x() + 10, rowY + 5, "Reset Pos");
@@ -612,7 +690,14 @@ public final class XpShellScreen extends Screen {
                     double normalized = (slider.getValue() - slider.getMin()) / (slider.getMax() - slider.getMin());
                     int trackX = pane.right() - 136;
                     renderer.renderSlider(graphics, trackX, rowY + 3, 92, normalized);
-                    graphics.text(font, formatSliderValue(slider.getValue(), slider.getStep()), pane.right() - 40, rowY + 5, 0xFF0E2C67, false);
+                    graphics.text(font, formatSliderValue(slider.getValue(), slider.getStep()), pane.right() - 40,
+                            rowY + 5, 0xFF0E2C67, false);
+                } else if (setting instanceof ColorSetting color) {
+                    int previewX = pane.right() - 126;
+                    int previewY = rowY + 2;
+                    int previewW = 116;
+                    int previewH = 14;
+                    renderColorPreviewButton(graphics, previewX, previewY, previewW, previewH, color.getArgb());
                 }
             }
             rowY += ROW_HEIGHT;
@@ -643,12 +728,12 @@ public final class XpShellScreen extends Screen {
                     button.bounds(),
                     label,
                     active,
-                    button.window().minimized
-            );
+                    button.window().minimized);
         }
     }
 
-    private boolean clickBackgroundOptions(CategoryWindow window, UiRect pane, double mouseX, double mouseY, int button) {
+    private boolean clickBackgroundOptions(CategoryWindow window, UiRect pane, double mouseX, double mouseY,
+            int button) {
         if (button != 0) {
             return false;
         }
@@ -657,7 +742,8 @@ public final class XpShellScreen extends Screen {
         int end = Math.min(backgroundOptions.size(), window.moduleScroll + rows);
         int rowY = top;
         for (int i = window.moduleScroll; i < end; i++) {
-            if (mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY && mouseY <= rowY + ROW_HEIGHT - 2) {
+            if (mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY
+                    && mouseY <= rowY + ROW_HEIGHT - 2) {
                 selectedBackgroundIndex = i;
                 saveUiSettings();
                 return true;
@@ -703,7 +789,8 @@ public final class XpShellScreen extends Screen {
         int end = Math.min(rows.size(), window.moduleScroll + visibleRows);
         int rowY = top;
         for (int i = window.moduleScroll; i < end; i++) {
-            if (mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY && mouseY <= rowY + ROW_HEIGHT - 2) {
+            if (mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY
+                    && mouseY <= rowY + ROW_HEIGHT - 2) {
                 KeybindRow row = rows.get(i);
                 window.selectedGuiKeybind = row.guiToggle;
                 window.selectedKeybindModule = row.module;
@@ -761,7 +848,8 @@ public final class XpShellScreen extends Screen {
         int rowY = top;
         for (int i = window.moduleScroll; i < end; i++) {
             Module module = modules.get(i);
-            if (mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY && mouseY <= rowY + ROW_HEIGHT - 2) {
+            if (mouseX >= pane.x() + 6 && mouseX <= pane.right() - 6 && mouseY >= rowY
+                    && mouseY <= rowY + ROW_HEIGHT - 2) {
                 window.selectedModule = module;
                 window.settingScroll = 0;
                 window.detailMessage = null;
@@ -841,6 +929,12 @@ public final class XpShellScreen extends Screen {
                         window.draggingSlider = slider;
                         window.draggingSliderTrack = track;
                         updateSliderFromMouse(slider, track, mouseX);
+                        return true;
+                    }
+                } else if (setting instanceof ColorSetting color) {
+                    UiRect preview = new UiRect(pane.right() - 126, rowY + 2, 116, 14);
+                    if (preview.contains(mouseX, mouseY)) {
+                        openColorPicker(window, color, preview.x(), preview.bottom() + 4);
                         return true;
                     }
                 }
@@ -1007,13 +1101,16 @@ public final class XpShellScreen extends Screen {
         UiRect contentPane = new UiRect(bounds.x() + 8, bounds.y() + 29, bounds.w() - 16, bounds.h() - 37);
         int modulesHeight = Math.max(110, Math.min(160, contentPane.h() / 2));
         UiRect modulesPane = new UiRect(contentPane.x() + 6, contentPane.y() + 22, contentPane.w() - 12, modulesHeight);
-        UiRect settingsPane = new UiRect(contentPane.x() + 6, modulesPane.bottom() + 8, contentPane.w() - 12, contentPane.bottom() - modulesPane.bottom() - 12);
+        UiRect settingsPane = new UiRect(contentPane.x() + 6, modulesPane.bottom() + 8, contentPane.w() - 12,
+                contentPane.bottom() - modulesPane.bottom() - 12);
         UiRect minButton = new UiRect(bounds.right() - 56, bounds.y() + 5, 15, 14);
         UiRect maxButton = new UiRect(bounds.right() - 38, bounds.y() + 5, 15, 14);
         UiRect closeButton = new UiRect(bounds.right() - 20, bounds.y() + 5, 15, 14);
         UiRect dragHandle = new UiRect(bounds.x() + 4, bounds.y() + 4, Math.max(10, bounds.w() - 64), 18);
-        UiRect resizeGrip = new UiRect(bounds.right() - RESIZE_GRIP_SIZE, bounds.bottom() - RESIZE_GRIP_SIZE, RESIZE_GRIP_SIZE, RESIZE_GRIP_SIZE);
-        return new WindowLayout(bounds, contentPane, modulesPane, settingsPane, minButton, maxButton, closeButton, dragHandle, resizeGrip);
+        UiRect resizeGrip = new UiRect(bounds.right() - RESIZE_GRIP_SIZE, bounds.bottom() - RESIZE_GRIP_SIZE,
+                RESIZE_GRIP_SIZE, RESIZE_GRIP_SIZE);
+        return new WindowLayout(bounds, contentPane, modulesPane, settingsPane, minButton, maxButton, closeButton,
+                dragHandle, resizeGrip);
     }
 
     private DesktopLayout buildDesktopLayout() {
@@ -1032,7 +1129,8 @@ public final class XpShellScreen extends Screen {
             if (x + slotWidth > right) {
                 break;
             }
-            buttons.add(new TaskbarButton(window, new UiRect(x, height - TASKBAR_HEIGHT + 3, slotWidth - 4, TASKBAR_HEIGHT - 6)));
+            buttons.add(new TaskbarButton(window,
+                    new UiRect(x, height - TASKBAR_HEIGHT + 3, slotWidth - 4, TASKBAR_HEIGHT - 6)));
             x += slotWidth;
         }
         return new DesktopLayout(startButtonBounds, trayBounds, buttons);
@@ -1369,9 +1467,7 @@ public final class XpShellScreen extends Screen {
                             window != null ? window.y : 40,
                             window != null ? window.width : DEFAULT_WINDOW_WIDTH,
                             window != null ? window.height : DEFAULT_WINDOW_HEIGHT,
-                            window != null ? windows.indexOf(window) : 999
-                    )
-            );
+                            window != null ? windows.indexOf(window) : 999));
         }
 
         CategoryWindow settingsWindow = findSettingsWindow();
@@ -1384,18 +1480,14 @@ public final class XpShellScreen extends Screen {
                         settingsWindow != null ? settingsWindow.y : 40,
                         settingsWindow != null ? settingsWindow.width : 460,
                         settingsWindow != null ? settingsWindow.height : 300,
-                        settingsWindow != null ? windows.indexOf(settingsWindow) : 999
-                )
-        );
+                        settingsWindow != null ? windows.indexOf(settingsWindow) : 999));
 
         UiSettingsStore.save(
                 uiSettingsPath,
                 new UiSettingsStore.UiSettings(
                         selectedBackground().label(),
                         XPHackClient.isModuleChatMessagesEnabled(),
-                        states
-                )
-        );
+                        states));
     }
 
     private CategoryWindow findCategoryWindow(Category category) {
@@ -1461,6 +1553,287 @@ public final class XpShellScreen extends Screen {
         }
     }
 
+    private void renderColorPreviewButton(GuiGraphicsExtractor graphics, int x, int y, int width, int height, int argb) {
+        renderer.renderModeButton(graphics, font, x, y, width, "");
+        int swatchX = x + 4;
+        int swatchY = y + 3;
+        int swatchW = width - 8;
+        int swatchH = height - 6;
+
+        graphics.fill(swatchX, swatchY, swatchX + swatchW, swatchY + swatchH, 0xFFFFFFFF);
+        graphics.fill(swatchX, swatchY, swatchX + swatchW, swatchY + swatchH, argb);
+        graphics.outline(swatchX, swatchY, swatchW, swatchH, 0xFF5F7291);
+    }
+
+    private void renderColorPickerPopup(GuiGraphicsExtractor graphics, CategoryWindow window) {
+        ColorPickerState picker = window.colorPicker;
+        if (!picker.isOpen()) {
+            return;
+        }
+
+        UiRect popup = colorPickerBounds(window);
+        int x = popup.x();
+        int y = popup.y();
+
+        renderer.renderWindowFrame(graphics, x, y, popup.w(), popup.h(), picker.setting.getName(), font);
+
+        UiRect square = colorSquareBounds(window);
+        UiRect hueBar = colorHueBarBounds(window);
+        UiRect alphaBar = colorAlphaBarBounds(window);
+        UiRect oldPreview = colorOldPreviewBounds(window);
+        UiRect newPreview = colorNewPreviewBounds(window);
+        UiRect okButton = colorOkButtonBounds(window);
+        UiRect cancelButton = colorCancelButtonBounds(window);
+        UiRect resetButton = colorResetButtonBounds(window);
+
+        renderColorSquare(graphics, square, picker.hue, picker.saturation, picker.brightness);
+        renderHueBar(graphics, hueBar, picker.hue);
+        renderAlphaBar(graphics, alphaBar, picker.hue, picker.saturation, picker.brightness, picker.alpha);
+
+        int previewArgb = buildPreviewColor(picker);
+        picker.previewArgb = previewArgb;
+
+        graphics.text(font, "Old", x + 10, y + 128, 0xFF0E2C67, false);
+        graphics.text(font, "New", x + 74, y + 128, 0xFF0E2C67, false);
+        renderSimpleColorSwatch(graphics, oldPreview, picker.originalArgb);
+        renderSimpleColorSwatch(graphics, newPreview, previewArgb);
+
+        graphics.text(font, "A: " + ((previewArgb >>> 24) & 0xFF), x + 142, y + 30, 0xFF1D2B4F, false);
+        graphics.text(font, "R: " + ((previewArgb >>> 16) & 0xFF), x + 142, y + 44, 0xFF1D2B4F, false);
+        graphics.text(font, "G: " + ((previewArgb >>> 8) & 0xFF), x + 142, y + 58, 0xFF1D2B4F, false);
+        graphics.text(font, "B: " + (previewArgb & 0xFF), x + 142, y + 72, 0xFF1D2B4F, false);
+
+        renderer.renderModeButton(graphics, font, okButton.x(), okButton.y(), okButton.w(), "OK");
+        renderer.renderModeButton(graphics, font, cancelButton.x(), cancelButton.y(), cancelButton.w(), "Cancel");
+        renderer.renderModeButton(graphics, font, resetButton.x(), resetButton.y(), resetButton.w(), "Reset");
+    }
+
+    private void renderSimpleColorSwatch(GuiGraphicsExtractor graphics, UiRect rect, int argb) {
+        renderer.renderModeButton(graphics, font, rect.x(), rect.y(), rect.w(), "");
+        graphics.fill(rect.x() + 3, rect.y() + 3, rect.right() - 3, rect.bottom() - 3, 0xFFFFFFFF);
+        graphics.fill(rect.x() + 3, rect.y() + 3, rect.right() - 3, rect.bottom() - 3, argb);
+        graphics.outline(rect.x() + 3, rect.y() + 3, rect.w() - 6, rect.h() - 6, 0xFF5F7291);
+    }
+
+    private void renderColorSquare(GuiGraphicsExtractor graphics, UiRect rect, float hue, float saturation, float brightness) {
+        graphics.fill(rect.x(), rect.y(), rect.right(), rect.bottom(), 0xFFFFFFFF);
+        graphics.outline(rect.x(), rect.y(), rect.w(), rect.h(), 0xFF5F7291);
+
+        for (int yy = 0; yy < rect.h() - 4; yy++) {
+            float rowBrightness = 1.0f - (yy / (float) Math.max(1, rect.h() - 5));
+            for (int xx = 0; xx < rect.w() - 4; xx++) {
+                float rowSaturation = xx / (float) Math.max(1, rect.w() - 5);
+                int rgb = Color.HSBtoRGB(hue, rowSaturation, rowBrightness) | 0xFF000000;
+                graphics.fill(rect.x() + 2 + xx, rect.y() + 2 + yy, rect.x() + 3 + xx, rect.y() + 3 + yy, rgb);
+            }
+        }
+
+        int markerX = rect.x() + 2 + Math.round(saturation * (rect.w() - 5));
+        int markerY = rect.y() + 2 + Math.round((1.0f - brightness) * (rect.h() - 5));
+        graphics.outline(markerX - 2, markerY - 2, 5, 5, 0xFF000000);
+        graphics.outline(markerX - 1, markerY - 1, 3, 3, 0xFFFFFFFF);
+    }
+
+    private void renderHueBar(GuiGraphicsExtractor graphics, UiRect rect, float selectedHue) {
+        graphics.fill(rect.x(), rect.y(), rect.right(), rect.bottom(), 0xFFFFFFFF);
+        graphics.outline(rect.x(), rect.y(), rect.w(), rect.h(), 0xFF5F7291);
+
+        for (int yy = 0; yy < rect.h() - 4; yy++) {
+            float hue = yy / (float) Math.max(1, rect.h() - 5);
+            int rgb = Color.HSBtoRGB(hue, 1.0f, 1.0f) | 0xFF000000;
+            graphics.fill(rect.x() + 2, rect.y() + 2 + yy, rect.right() - 2, rect.y() + 3 + yy, rgb);
+        }
+
+        int markerY = rect.y() + 2 + Math.round(selectedHue * (rect.h() - 5));
+        graphics.fill(rect.x() + 1, markerY, rect.right() - 1, markerY + 1, 0xFF000000);
+        graphics.fill(rect.x() + 2, markerY + 1, rect.right() - 2, markerY + 2, 0xFFFFFFFF);
+    }
+
+    private void renderAlphaBar(GuiGraphicsExtractor graphics, UiRect rect, float hue, float saturation, float brightness, float alpha) {
+        graphics.fill(rect.x(), rect.y(), rect.right(), rect.bottom(), 0xFFFFFFFF);
+        graphics.outline(rect.x(), rect.y(), rect.w(), rect.h(), 0xFF5F7291);
+
+        int baseRgb = Color.HSBtoRGB(hue, saturation, brightness) & 0x00FFFFFF;
+        for (int yy = 0; yy < rect.h() - 4; yy++) {
+            float currentAlpha = 1.0f - (yy / (float) Math.max(1, rect.h() - 5));
+            int argb = ((int) (currentAlpha * 255.0f) << 24) | baseRgb;
+            graphics.fill(rect.x() + 2, rect.y() + 2 + yy, rect.right() - 2, rect.y() + 3 + yy, argb);
+        }
+
+        int markerY = rect.y() + 2 + Math.round((1.0f - alpha) * (rect.h() - 5));
+        graphics.fill(rect.x() + 1, markerY, rect.right() - 1, markerY + 1, 0xFF000000);
+        graphics.fill(rect.x() + 2, markerY + 1, rect.right() - 2, markerY + 2, 0xFFFFFFFF);
+    }
+
+    private boolean handleColorPickerClick(CategoryWindow window, double mouseX, double mouseY, int button) {
+        if (button != 0) {
+            return true;
+        }
+
+        ColorPickerState picker = window.colorPicker;
+        UiRect square = colorSquareBounds(window);
+        UiRect hue = colorHueBarBounds(window);
+        UiRect alpha = colorAlphaBarBounds(window);
+        UiRect ok = colorOkButtonBounds(window);
+        UiRect cancel = colorCancelButtonBounds(window);
+        UiRect reset = colorResetButtonBounds(window);
+
+        if (square.contains(mouseX, mouseY)) {
+            picker.draggingSquare = true;
+            updateColorSquareFromMouse(picker, mouseX, mouseY, square);
+            return true;
+        }
+
+        if (hue.contains(mouseX, mouseY)) {
+            picker.draggingHue = true;
+            updateHueFromMouse(picker, mouseY, hue);
+            return true;
+        }
+
+        if (alpha.contains(mouseX, mouseY)) {
+            picker.draggingAlpha = true;
+            updateAlphaFromMouse(picker, mouseY, alpha);
+            return true;
+        }
+
+        if (ok.contains(mouseX, mouseY)) {
+            picker.setting.setArgb(buildPreviewColor(picker));
+            moduleManager.saveSettings();
+            picker.close();
+            return true;
+        }
+
+        if (cancel.contains(mouseX, mouseY)) {
+            picker.setting.setArgb(picker.originalArgb);
+            picker.close();
+            return true;
+        }
+
+        if (reset.contains(mouseX, mouseY)) {
+            picker.setting.reset();
+            openColorPicker(window, picker.setting, picker.anchorX, picker.anchorY);
+            moduleManager.saveSettings();
+            return true;
+        }
+
+        return true;
+    }
+
+    private boolean handleColorPickerDrag(CategoryWindow window, double mouseX, double mouseY) {
+        ColorPickerState picker = window.colorPicker;
+        if (!picker.isOpen()) {
+            return false;
+        }
+
+        if (picker.draggingSquare) {
+            updateColorSquareFromMouse(picker, mouseX, mouseY, colorSquareBounds(window));
+            return true;
+        }
+        if (picker.draggingHue) {
+            updateHueFromMouse(picker, mouseY, colorHueBarBounds(window));
+            return true;
+        }
+        if (picker.draggingAlpha) {
+            updateAlphaFromMouse(picker, mouseY, colorAlphaBarBounds(window));
+            return true;
+        }
+        return false;
+    }
+
+    private void updateColorSquareFromMouse(ColorPickerState picker, double mouseX, double mouseY, UiRect square) {
+        double localX = (mouseX - (square.x() + 2)) / (double) (square.w() - 5);
+        double localY = (mouseY - (square.y() + 2)) / (double) (square.h() - 5);
+        picker.saturation = (float) Mth.clamp(localX, 0.0, 1.0);
+        picker.brightness = 1.0f - (float) Mth.clamp(localY, 0.0, 1.0);
+    }
+
+    private void updateHueFromMouse(ColorPickerState picker, double mouseY, UiRect hueBar) {
+        double local = (mouseY - (hueBar.y() + 2)) / (double) (hueBar.h() - 5);
+        picker.hue = (float) Mth.clamp(local, 0.0, 1.0);
+    }
+
+    private void updateAlphaFromMouse(ColorPickerState picker, double mouseY, UiRect alphaBar) {
+        double local = (mouseY - (alphaBar.y() + 2)) / (double) (alphaBar.h() - 5);
+        picker.alpha = 1.0f - (float) Mth.clamp(local, 0.0, 1.0);
+    }
+
+    private int buildPreviewColor(ColorPickerState picker) {
+        int rgb = Color.HSBtoRGB(picker.hue, picker.saturation, picker.brightness) & 0x00FFFFFF;
+        int alpha = Math.max(0, Math.min(255, Math.round(picker.alpha * 255.0f)));
+        return (alpha << 24) | rgb;
+    }
+
+    private void openColorPicker(CategoryWindow window, ColorSetting setting, int x, int y) {
+        UiRect popup = anchoredColorPickerBounds(x, y);
+        window.colorPicker.setting = setting;
+        window.colorPicker.anchorX = popup.x();
+        window.colorPicker.anchorY = popup.y();
+        window.colorPicker.originalArgb = setting.getArgb();
+        window.colorPicker.previewArgb = setting.getArgb();
+
+        float[] hsb = Color.RGBtoHSB(setting.getRed(), setting.getGreen(), setting.getBlue(), null);
+        window.colorPicker.hue = hsb[0];
+        window.colorPicker.saturation = hsb[1];
+        window.colorPicker.brightness = hsb[2];
+        window.colorPicker.alpha = setting.getAlpha() / 255.0f;
+    }
+
+    private UiRect anchoredColorPickerBounds(int x, int y) {
+        int popupX = x;
+        int popupY = y;
+        if (popupX + COLOR_POPUP_WIDTH > width - 4) {
+            popupX = Math.max(4, width - COLOR_POPUP_WIDTH - 4);
+        }
+        if (popupY + COLOR_POPUP_HEIGHT > height - TASKBAR_HEIGHT - 4) {
+            popupY = Math.max(4, height - TASKBAR_HEIGHT - COLOR_POPUP_HEIGHT - 4);
+        }
+        return new UiRect(popupX, popupY, COLOR_POPUP_WIDTH, COLOR_POPUP_HEIGHT);
+    }
+
+    private UiRect colorPickerBounds(CategoryWindow window) {
+        return new UiRect(window.colorPicker.anchorX, window.colorPicker.anchorY, COLOR_POPUP_WIDTH, COLOR_POPUP_HEIGHT);
+    }
+
+    private UiRect colorSquareBounds(CategoryWindow window) {
+        UiRect popup = colorPickerBounds(window);
+        return new UiRect(popup.x() + 10, popup.y() + 26, COLOR_SQUARE_SIZE, COLOR_SQUARE_SIZE);
+    }
+
+    private UiRect colorHueBarBounds(CategoryWindow window) {
+        UiRect popup = colorPickerBounds(window);
+        return new UiRect(popup.x() + 116, popup.y() + 26, COLOR_BAR_WIDTH, COLOR_BAR_HEIGHT);
+    }
+
+    private UiRect colorAlphaBarBounds(CategoryWindow window) {
+        UiRect popup = colorPickerBounds(window);
+        return new UiRect(popup.x() + 138, popup.y() + 26, COLOR_BAR_WIDTH, COLOR_BAR_HEIGHT);
+    }
+
+    private UiRect colorOldPreviewBounds(CategoryWindow window) {
+        UiRect popup = colorPickerBounds(window);
+        return new UiRect(popup.x() + 10, popup.y() + 140, 52, 18);
+    }
+
+    private UiRect colorNewPreviewBounds(CategoryWindow window) {
+        UiRect popup = colorPickerBounds(window);
+        return new UiRect(popup.x() + 74, popup.y() + 140, 52, 18);
+    }
+
+    private UiRect colorOkButtonBounds(CategoryWindow window) {
+        UiRect popup = colorPickerBounds(window);
+        return new UiRect(popup.x() + 136, popup.y() + 122, 34, 16);
+    }
+
+    private UiRect colorCancelButtonBounds(CategoryWindow window) {
+        UiRect popup = colorPickerBounds(window);
+        return new UiRect(popup.x() + 174, popup.y() + 122, 42, 16);
+    }
+
+    private UiRect colorResetButtonBounds(CategoryWindow window) {
+        UiRect popup = colorPickerBounds(window);
+        return new UiRect(popup.x() + 136, popup.y() + 144, 80, 16);
+    }
+
     private static final class CategoryWindow {
         private final Category category;
         private int x;
@@ -1491,6 +1864,7 @@ public final class XpShellScreen extends Screen {
         private int restoreY;
         private int restoreWidth = DEFAULT_WINDOW_WIDTH;
         private int restoreHeight = DEFAULT_WINDOW_HEIGHT;
+        private final ColorPickerState colorPicker = new ColorPickerState();
 
         private CategoryWindow(Category category) {
             this.category = category;
@@ -1506,8 +1880,7 @@ public final class XpShellScreen extends Screen {
             UiRect maximizeButtonBounds,
             UiRect closeButtonBounds,
             UiRect dragHandleBounds,
-            UiRect resizeGripBounds
-    ) {
+            UiRect resizeGripBounds) {
     }
 
     private record TaskbarButton(CategoryWindow window, UiRect bounds) {
@@ -1531,5 +1904,31 @@ public final class XpShellScreen extends Screen {
     }
 
     private record BackgroundOption(String label, BackgroundType type, Path file, Identifier textureId) {
+    }
+
+    private static final class ColorPickerState {
+        private ColorSetting setting;
+        private int anchorX;
+        private int anchorY;
+        private int originalArgb;
+        private int previewArgb;
+        private float hue;
+        private float saturation;
+        private float brightness;
+        private float alpha;
+        private boolean draggingSquare;
+        private boolean draggingHue;
+        private boolean draggingAlpha;
+
+        private boolean isOpen() {
+            return setting != null;
+        }
+
+        private void close() {
+            setting = null;
+            draggingSquare = false;
+            draggingHue = false;
+            draggingAlpha = false;
+        }
     }
 }
