@@ -1,0 +1,12 @@
+package net.ozanarchy.brooksclient.client.setting;
+
+public final class BooleanSetting extends Setting<Boolean> {
+    public BooleanSetting(String name, boolean defaultValue) {
+        super(name, defaultValue);
+    }
+
+    public void toggle() {
+        setValue(!getValue());
+    }
+}
+

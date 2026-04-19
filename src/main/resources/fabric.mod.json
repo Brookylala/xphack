@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "xphack",
+  "version": "${version}",
+  "name": "XPHack",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "environment": "client",
+  "entrypoints": {
+    "fabric-datagen": [
+      "net.ozanarchy.brooksclient.client.XPHackDataGenerator"
+    ],
+    "client": [
+      "net.ozanarchy.brooksclient.client.XPHackClient"
+    ],
+    "main": [
+      "net.ozanarchy.brooksclient.XPHack"
+    ]
+  },
+  "mixins": [
+    "xphack.mixins.json",
+    {
+      "config": "xphack.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
